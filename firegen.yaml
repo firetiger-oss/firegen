@@ -1,0 +1,10 @@
+metrics: 2
+interval: 10
+services: 7
+attributes:
+  - name: plane
+    cardinality: 2
+  - name: pod
+    cardinality: 2
+  - name: series
+    cardinality: 2
