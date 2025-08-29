@@ -159,7 +159,7 @@ func generate(
 		gauges[i] = gauge
 	}
 
-	exportTimeout := interval / 4
+	exportTimeout := time.Second
 	tick := func() {
 		// Step 1: record metrics
 		for _, gauge := range gauges {
