@@ -182,7 +182,9 @@ func generate(
 
 		// Step 3: export metrics
 		exportCtx, cancel := context.WithTimeout(ctx, exportTimeout)
+		t := time.Now()
 		err = exporter.Export(exportCtx, &metrics)
+		td := time.Since(t)
 		cancel()
 		if errors.Is(err, context.DeadlineExceeded) {
 			log.Printf("Timeout after %s exporting metrics for %s", exportTimeout, serviceName)
@@ -191,7 +193,7 @@ func generate(
 		} else if err != nil {
 			log.Printf("Failed to export metrics for %s: %v", serviceName, err)
 		} else {
-			log.Printf("Exported %d measurements for %s", len(gauges), serviceName)
+			log.Printf("Exported %d measurements for %s in %dms", len(gauges), serviceName, td.Milliseconds())
 		}
 	}
 
