@@ -38,21 +38,54 @@ type attributeConfig struct {
 	Cardinality int    `yaml:"cardinality"`
 }
 
+type options struct {
+	configFile string
+	endpoint   string
+	plaintext  bool
+	token      string
+	useHTTP    bool
+}
+
+func (opts options) newExporter(ctx context.Context) (sdkmetric.Exporter, error) {
+	if opts.useHTTP {
+		httpOpts := []otlpmetrichttp.Option{otlpmetrichttp.WithEndpoint(opts.endpoint)}
+		if opts.plaintext {
+			httpOpts = append(httpOpts, otlpmetrichttp.WithInsecure())
+		}
+		if opts.token != "" {
+			httpOpts = append(httpOpts, otlpmetrichttp.WithHeaders(map[string]string{
+				"authorization": "Bearer " + opts.token,
+			}))
+		}
+		return otlpmetrichttp.New(ctx, httpOpts...)
+	}
+
+	grpcOpts := []otlpmetricgrpc.Option{otlpmetricgrpc.WithEndpoint(opts.endpoint)}
+	if opts.plaintext {
+		grpcOpts = append(grpcOpts, otlpmetricgrpc.WithTLSCredentials(insecure.NewCredentials()))
+	}
+	if opts.token != "" {
+		grpcOpts = append(grpcOpts, otlpmetricgrpc.WithHeaders(map[string]string{
+			"authorization": "Bearer " + opts.token,
+		}))
+	}
+	return otlpmetricgrpc.New(ctx, grpcOpts...)
+}
+
 func main() {
-	var (
-		configFile = flag.String("config", "firegen.yaml", "Path to config file")
-		endpoint   = flag.String("endpoint", "localhost:4317", "OTLP endpoint")
-		plaintext  = flag.Bool("plaintext", false, "Use plaintext connection instead of TLS")
-		token      = flag.String("token", "", "Bearer token for authentication")
-		useHTTP    = flag.Bool("http", false, "Use HTTP instead of gRPC")
-	)
+	var opts options
+	flag.StringVar(&opts.configFile, "config", "firegen.yaml", "Path to config file")
+	flag.StringVar(&opts.endpoint, "endpoint", "localhost:4317", "OTLP endpoint")
+	flag.BoolVar(&opts.plaintext, "plaintext", false, "Use plaintext connection instead of TLS")
+	flag.StringVar(&opts.token, "token", "", "Bearer token for authentication")
+	flag.BoolVar(&opts.useHTTP, "http", false, "Use HTTP instead of gRPC")
 	flag.Parse()
 
 	var cfg config
-	if f, err := os.Open(*configFile); err != nil {
-		log.Fatalf("Failed to open %s: %v", *configFile, err)
+	if f, err := os.Open(opts.configFile); err != nil {
+		log.Fatalf("Failed to open %s: %v", opts.configFile, err)
 	} else if err := yaml.NewDecoder(f).Decode(&cfg); err != nil {
-		log.Fatalf("Failed to parse %s: %v", *configFile, err)
+		log.Fatalf("Failed to parse %s: %v", opts.configFile, err)
 	}
 	cfg.Metrics = max(1, cfg.Metrics)
 	cfg.Interval = max(1, cfg.Interval)
@@ -64,39 +97,6 @@ func main() {
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
-
-	var exporter sdkmetric.Exporter
-	var err error
-
-	if *useHTTP {
-		var httpOpts []otlpmetrichttp.Option
-		httpOpts = append(httpOpts, otlpmetrichttp.WithEndpoint(*endpoint))
-		if *plaintext {
-			httpOpts = append(httpOpts, otlpmetrichttp.WithInsecure())
-		}
-		if *token != "" {
-			httpOpts = append(httpOpts, otlpmetrichttp.WithHeaders(map[string]string{
-				"authorization": "Bearer " + *token,
-			}))
-		}
-		exporter, err = otlpmetrichttp.New(ctx, httpOpts...)
-	} else {
-		var grpcOpts []otlpmetricgrpc.Option
-		grpcOpts = append(grpcOpts, otlpmetricgrpc.WithEndpoint(*endpoint))
-		if *plaintext {
-			grpcOpts = append(grpcOpts, otlpmetricgrpc.WithTLSCredentials(insecure.NewCredentials()))
-		}
-		if *token != "" {
-			grpcOpts = append(grpcOpts, otlpmetricgrpc.WithHeaders(map[string]string{
-				"authorization": "Bearer " + *token,
-			}))
-		}
-		exporter, err = otlpmetricgrpc.New(ctx, grpcOpts...)
-	}
-	if err != nil {
-		log.Fatalf("Failed to create OTLP exporter: %v", err)
-	}
-	defer exporter.Shutdown(ctx)
 
 	metricNames := slices.Collect(func(yield func(string) bool) {
 		for i := range cfg.Metrics {
@@ -120,7 +120,7 @@ func main() {
 	for i := range cfg.Services {
 		serviceName := fmt.Sprintf("service-%04d", i)
 		offset := time.Duration(float32(interval) * float32(i) / float32(cfg.Services))
-		go generate(ctx, serviceName, metricNames, allAttributes, offset, interval, exporter)
+		go generate(ctx, serviceName, metricNames, allAttributes, offset, interval, opts)
 	}
 
 	log.Printf("")
@@ -136,8 +136,14 @@ func generate(
 	metricNames []string,
 	allAttributes [][]attribute.KeyValue,
 	offset, interval time.Duration,
-	exporter sdkmetric.Exporter,
+	opts options,
 ) {
+	exporter, err := opts.newExporter(ctx)
+	if err != nil {
+		log.Fatalf("Failed to create OTLP exporter for service %s: %v", serviceName, err)
+	}
+	defer exporter.Shutdown(ctx)
+
 	res, err := resource.New(ctx,
 		resource.WithAttributes(semconv.ServiceNameKey.String(serviceName)),
 	)
