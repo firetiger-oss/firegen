@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"flag"
 	"fmt"
@@ -44,18 +45,27 @@ type options struct {
 	plaintext  bool
 	token      string
 	useHTTP    bool
+	username   string
+	password   string
 }
 
 func (opts options) newExporter(ctx context.Context) (sdkmetric.Exporter, error) {
+	headers := make(map[string]string)
+
+	if opts.token != "" {
+		headers["authorization"] = "Bearer " + opts.token
+	} else if opts.username != "" && opts.password != "" {
+		auth := base64.StdEncoding.EncodeToString([]byte(opts.username + ":" + opts.password))
+		headers["authorization"] = "Basic " + auth
+	}
+
 	if opts.useHTTP {
 		httpOpts := []otlpmetrichttp.Option{otlpmetrichttp.WithEndpoint(opts.endpoint)}
 		if opts.plaintext {
 			httpOpts = append(httpOpts, otlpmetrichttp.WithInsecure())
 		}
-		if opts.token != "" {
-			httpOpts = append(httpOpts, otlpmetrichttp.WithHeaders(map[string]string{
-				"authorization": "Bearer " + opts.token,
-			}))
+		if len(headers) > 0 {
+			httpOpts = append(httpOpts, otlpmetrichttp.WithHeaders(headers))
 		}
 		return otlpmetrichttp.New(ctx, httpOpts...)
 	}
@@ -64,10 +74,8 @@ func (opts options) newExporter(ctx context.Context) (sdkmetric.Exporter, error)
 	if opts.plaintext {
 		grpcOpts = append(grpcOpts, otlpmetricgrpc.WithTLSCredentials(insecure.NewCredentials()))
 	}
-	if opts.token != "" {
-		grpcOpts = append(grpcOpts, otlpmetricgrpc.WithHeaders(map[string]string{
-			"authorization": "Bearer " + opts.token,
-		}))
+	if len(headers) > 0 {
+		grpcOpts = append(grpcOpts, otlpmetricgrpc.WithHeaders(headers))
 	}
 	return otlpmetricgrpc.New(ctx, grpcOpts...)
 }
@@ -78,6 +86,8 @@ func main() {
 	flag.StringVar(&opts.endpoint, "endpoint", "localhost:4317", "OTLP endpoint")
 	flag.BoolVar(&opts.plaintext, "plaintext", false, "Use plaintext connection instead of TLS")
 	flag.StringVar(&opts.token, "token", "", "Bearer token for authentication")
+	flag.StringVar(&opts.username, "username", "", "Username for Basic authentication")
+	flag.StringVar(&opts.password, "password", "", "Password for Basic authentication")
 	flag.BoolVar(&opts.useHTTP, "http", false, "Use HTTP instead of gRPC")
 	flag.Parse()
 
