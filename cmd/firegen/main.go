@@ -47,6 +47,7 @@ type options struct {
 	useHTTP    bool
 	username   string
 	password   string
+	timeout    time.Duration
 }
 
 func (opts options) newExporter(ctx context.Context) (sdkmetric.Exporter, error) {
@@ -89,6 +90,7 @@ func main() {
 	flag.StringVar(&opts.username, "username", "", "Username for Basic authentication")
 	flag.StringVar(&opts.password, "password", "", "Password for Basic authentication")
 	flag.BoolVar(&opts.useHTTP, "http", false, "Use HTTP instead of gRPC")
+	flag.DurationVar(&opts.timeout, "timeout", 1*time.Second, "Request timeout")
 	flag.Parse()
 
 	var cfg config
@@ -175,7 +177,6 @@ func generate(
 		gauges[i] = gauge
 	}
 
-	exportTimeout := time.Second
 	tick := func() {
 		// Step 1: record metrics
 		for _, gauge := range gauges {
@@ -191,13 +192,13 @@ func generate(
 		}
 
 		// Step 3: export metrics
-		exportCtx, cancel := context.WithTimeout(ctx, exportTimeout)
+		exportCtx, cancel := context.WithTimeout(ctx, opts.timeout)
 		t := time.Now()
 		err = exporter.Export(exportCtx, &metrics)
 		td := time.Since(t)
 		cancel()
 		if errors.Is(err, context.DeadlineExceeded) {
-			log.Printf("Timeout after %s exporting metrics for %s", exportTimeout, serviceName)
+			log.Printf("Timeout after %s exporting metrics for %s", opts.timeout, serviceName)
 		} else if ctx.Err() != nil {
 			return
 		} else if err != nil {
